@@ -4,17 +4,18 @@ import {
   Edit2, X, ShoppingBag, Package, AlertCircle, TrendingUp, Link as LinkIcon,
   User, Ruler, Heart, ShieldAlert, History, Tag, ExternalLink, Sparkles, Loader2, ArrowRight,
   Menu, ChevronDown, Users, Lock, Wallet, Calculator, Search, Lightbulb, ThumbsUp, MessageSquare,
-  ArrowUpDown, GripVertical, FolderOpen, Settings, Download, Upload, FileJson, ChevronRight
+  ArrowUpDown, GripVertical, FolderOpen, Settings, Download, Upload, FileJson, ChevronRight,
+  PenTool, RefreshCw
 } from 'lucide-react';
 
 // --- Gemini API Helpers ---
-// PRODUCTION READY: Connects to your local .env file or Vercel environment variables
+
+// PRODUCTION READY: This looks for the key in your environment variables.
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; 
 
 const generateGeminiGiftIdeas = async (person, budgetLeft) => {
   const prompt = `
     Act as a thoughtful personal shopper. Suggest 5 specific gift ideas for ${person.name}.
-    
     Target Budget: Under £${budgetLeft > 0 ? budgetLeft : 50} (be flexible but realistic).
     
     User Profile:
@@ -151,6 +152,61 @@ const analyzeGiftMatch = async (person, giftName) => {
   }
 };
 
+const generateGiftAlternatives = async (person, gift) => {
+  const prompt = `
+    Suggest 3 alternative gift ideas for ${person.name} that are similar to "${gift.name}" but distinct options.
+    Current Gift Price: £${gift.price} (Keep alternatives in similar range).
+    Profile: ${JSON.stringify(person.profile)}
+
+    Output Requirements:
+    Return ONLY a valid JSON array of objects.
+    Schema:
+    [ { "name": "Product Name", "estimatedPrice": 25, "category": "Category" } ]
+  `;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        }),
+      }
+    );
+    if (!response.ok) throw new Error('API Error');
+    const data = await response.json();
+    return JSON.parse(data.candidates?.[0]?.content?.parts?.[0]?.text);
+  } catch (error) {
+    return [];
+  }
+};
+
+const generateCardMessage = async (person, gift) => {
+  const prompt = `
+    Write a short, warm, and witty gift card message for ${person.name} (${person.profile?.relationship || 'Friend'}) to go with their gift: "${gift.name}".
+    Tone: Sincere but fun. Max 30 words.
+    Output ONLY the message text.
+  `;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      }
+    );
+    if (!response.ok) throw new Error('API Error');
+    return await response.json().then(data => data.candidates?.[0]?.content?.parts?.[0]?.text);
+  } catch (error) {
+    return "Hope you love it!";
+  }
+};
+
 // --- UI Components ---
 
 const Card = ({ children, className = "" }) => (
@@ -207,218 +263,30 @@ const Badge = ({ children, color = "slate" }) => {
 // --- Main Application ---
 
 export default function App() {
-  // --- Project Management Logic ---
-  
-  // 1. Load Projects List
-  const loadProjects = () => {
+  const loadState = (key, defaultValue) => {
     try {
-      const saved = localStorage.getItem('gift_planner_projects');
-      return saved ? JSON.parse(saved) : [];
-    } catch(e) { return [] }
-  };
-
-  const [projects, setProjects] = useState(loadProjects);
-  const [activeProjectId, setActiveProjectId] = useState(null);
-  
-  // 2. Migrate Legacy Data (Run Once)
-  useEffect(() => {
-    // Check if we have legacy data but no projects
-    const legacyPeople = localStorage.getItem('gift_planner_people_v1') || localStorage.getItem('xmas_people_v8');
-    
-    if (projects.length === 0) {
-      // Create Default Project
-      const newProject = { id: 'default_' + Date.now(), name: 'My First Plan' };
-      const newProjectsList = [newProject];
-      setProjects(newProjectsList);
-      setActiveProjectId(newProject.id);
-      
-      // If we have legacy data, migrate it to this new project ID
-      if (legacyPeople) {
-        const legacyGifts = localStorage.getItem('gift_planner_gifts_v1') || localStorage.getItem('xmas_gifts_v8');
-        const legacyLimit = localStorage.getItem('gift_planner_limit_v1') || localStorage.getItem('xmas_global_limit_v8');
-        
-        const projectData = {
-          people: legacyPeople ? JSON.parse(legacyPeople) : [],
-          gifts: legacyGifts ? JSON.parse(legacyGifts) : [],
-          limit: legacyLimit ? JSON.parse(legacyLimit) : 0
-        };
-        localStorage.setItem(`gift_planner_data_${newProject.id}`, JSON.stringify(projectData));
-      }
-      
-      // Save the project list
-      localStorage.setItem('gift_planner_projects', JSON.stringify(newProjectsList));
-    } else if (!activeProjectId && projects.length > 0) {
-      // If we have projects but none selected (refresh), select first
-      setActiveProjectId(projects[0].id);
+      const saved = localStorage.getItem(key);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error("Storage load error", e);
     }
-  }, []);
+    return defaultValue;
+  };
 
-  // 3. Data State (People, Gifts, Limit)
-  const [people, setPeople] = useState([]);
-  const [gifts, setGifts] = useState([]);
-  const [globalBudgetLimit, setGlobalBudgetLimit] = useState(0);
-  const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
-  const [isManageProjectsOpen, setIsManageProjectsOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
-  
-  // NEW: Edit Project State
-  const [editingProjectId, setEditingProjectId] = useState(null);
-  const [tempEditName, setTempEditName] = useState('');
+  // CLEAN SLATE FOR PUBLISHING
+  const defaultPeople = [];
+  const defaultGifts = [];
 
-  // 4. Load Data when Active Project Changes
+  const [people, setPeople] = useState(() => loadState('xmas_people_v9', defaultPeople));
+  const [gifts, setGifts] = useState(() => loadState('xmas_gifts_v9', defaultGifts));
+  const [globalBudgetLimit, setGlobalBudgetLimit] = useState(() => loadState('xmas_global_limit_v9', 0));
+
   useEffect(() => {
-    if (!activeProjectId) return;
-    
-    const projectKey = `gift_planner_data_${activeProjectId}`;
-    const savedData = localStorage.getItem(projectKey);
-    
-    if (savedData) {
-      const parsed = JSON.parse(savedData);
-      setPeople(parsed.people || []);
-      setGifts(parsed.gifts || []);
-      setGlobalBudgetLimit(parsed.limit || 0);
-    } else {
-      // Initialize empty for new project
-      setPeople([]);
-      setGifts([]);
-      setGlobalBudgetLimit(0);
-    }
-    
-    // Close active tab when switching projects
-    setActiveTab(null);
-  }, [activeProjectId]);
+    localStorage.setItem('xmas_people_v9', JSON.stringify(people));
+    localStorage.setItem('xmas_gifts_v9', JSON.stringify(gifts));
+    localStorage.setItem('xmas_global_limit_v9', JSON.stringify(globalBudgetLimit));
+  }, [people, gifts, globalBudgetLimit]);
 
-  // 5. Save Data whenever it changes
-  useEffect(() => {
-    if (!activeProjectId) return;
-    
-    const projectData = {
-      people,
-      gifts,
-      limit: globalBudgetLimit
-    };
-    localStorage.setItem(`gift_planner_data_${activeProjectId}`, JSON.stringify(projectData));
-    
-    // Also save projects list just in case
-    localStorage.setItem('gift_planner_projects', JSON.stringify(projects));
-    
-  }, [people, gifts, globalBudgetLimit, projects, activeProjectId]);
-
-
-  // --- Project Management Functions ---
-
-  const handleCreateProject = () => {
-    if (!newProjectName) return;
-    const newProject = { id: 'proj_' + Date.now(), name: newProjectName };
-    const updatedProjects = [...projects, newProject];
-    setProjects(updatedProjects);
-    setActiveProjectId(newProject.id); // Switch to it
-    setNewProjectName('');
-    setIsManageProjectsOpen(false);
-  };
-
-  const handleDeleteProject = (idToDelete) => {
-    if (window.confirm("Are you sure? This will delete all gifts in this project.")) {
-      const updatedProjects = projects.filter(p => p.id !== idToDelete);
-      setProjects(updatedProjects);
-      
-      // Clean up data
-      localStorage.removeItem(`gift_planner_data_${idToDelete}`);
-      
-      // Switch context if we deleted the active one
-      if (activeProjectId === idToDelete) {
-         if (updatedProjects.length > 0) {
-           setActiveProjectId(updatedProjects[0].id);
-         } else {
-           // No projects left, re-trigger init logic on reload or handle gracefully
-           setActiveProjectId(null);
-           setPeople([]); 
-           setGifts([]);
-         }
-      }
-    }
-  };
-
-  const handleStartEditProject = (project) => {
-    setEditingProjectId(project.id);
-    setTempEditName(project.name);
-  };
-
-  const handleSaveProjectName = (projectId) => {
-    if (!tempEditName.trim()) return;
-    
-    const updatedProjects = projects.map(p => 
-      p.id === projectId ? { ...p, name: tempEditName } : p
-    );
-    
-    setProjects(updatedProjects);
-    
-    setEditingProjectId(null);
-    setTempEditName('');
-  };
-
-  const handleCancelEditProject = () => {
-    setEditingProjectId(null);
-    setTempEditName('');
-  };
-
-  // --- Backup & Restore Logic ---
-  const handleExportBackup = () => {
-    const backupData = {
-      projects: projects,
-      projectData: {}
-    };
-
-    projects.forEach(p => {
-      const key = `gift_planner_data_${p.id}`;
-      backupData.projectData[key] = JSON.parse(localStorage.getItem(key) || '{"people":[], "gifts":[], "limit":0}');
-    });
-
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `gift_planner_backup_${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
-
-  const handleImportBackup = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const imported = JSON.parse(e.target.result);
-        
-        if (!imported.projects || !Array.isArray(imported.projects)) {
-          alert("Invalid backup file.");
-          return;
-        }
-
-        if (window.confirm("This will overwrite your current projects. Are you sure?")) {
-          setProjects(imported.projects);
-          localStorage.setItem('gift_planner_projects', JSON.stringify(imported.projects));
-
-          Object.keys(imported.projectData).forEach(key => {
-            localStorage.setItem(key, JSON.stringify(imported.projectData[key]));
-          });
-
-          setActiveProjectId(imported.projects[0]?.id || null);
-          setIsManageProjectsOpen(false);
-          alert("Backup restored successfully!");
-        }
-      } catch (error) {
-        console.error(error);
-        alert("Error restoring file.");
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  // --- Standard App State ---
   const [activeTab, setActiveTab] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isAddPersonModalOpen, setIsAddPersonModalOpen] = useState(false);
@@ -452,6 +320,77 @@ export default function App() {
   });
   const [isEditingGlobalBudget, setIsEditingGlobalBudget] = useState(false);
   const [tempGlobalBudget, setTempGlobalBudget] = useState('');
+
+  // New AI Feature States
+  const [alternatives, setAlternatives] = useState([]);
+  const [isGeneratingAlternatives, setIsGeneratingAlternatives] = useState(false);
+  const [generatedCardMessage, setGeneratedCardMessage] = useState('');
+  const [isWritingCard, setIsWritingCard] = useState(false);
+
+  // --- Project Management Logic ---
+  const loadProjects = () => {
+    try {
+      const saved = localStorage.getItem('gift_planner_projects');
+      return saved ? JSON.parse(saved) : [];
+    } catch(e) { return [] }
+  };
+
+  const [projects, setProjects] = useState(loadProjects);
+  const [activeProjectId, setActiveProjectId] = useState(null);
+  const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+  const [isManageProjectsOpen, setIsManageProjectsOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [editingProjectId, setEditingProjectId] = useState(null);
+  const [tempEditName, setTempEditName] = useState('');
+  
+  useEffect(() => {
+    const legacyPeople = localStorage.getItem('gift_planner_people_v1') || localStorage.getItem('xmas_people_v8');
+    
+    if (projects.length === 0) {
+      const newProject = { id: 'default_' + Date.now(), name: 'My First Plan' };
+      const newProjectsList = [newProject];
+      setProjects(newProjectsList);
+      setActiveProjectId(newProject.id);
+      
+      if (legacyPeople) {
+        const legacyGifts = localStorage.getItem('gift_planner_gifts_v1') || localStorage.getItem('xmas_gifts_v8');
+        const legacyLimit = localStorage.getItem('gift_planner_limit_v1') || localStorage.getItem('xmas_global_limit_v8');
+        
+        const projectData = {
+          people: legacyPeople ? JSON.parse(legacyPeople) : [],
+          gifts: legacyGifts ? JSON.parse(legacyGifts) : [],
+          limit: legacyLimit ? JSON.parse(legacyLimit) : 0
+        };
+        localStorage.setItem(`gift_planner_data_${newProject.id}`, JSON.stringify(projectData));
+      }
+      localStorage.setItem('gift_planner_projects', JSON.stringify(newProjectsList));
+    } else if (!activeProjectId && projects.length > 0) {
+      setActiveProjectId(projects[0].id);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const projectKey = `gift_planner_data_${activeProjectId}`;
+    const savedData = localStorage.getItem(projectKey);
+    
+    if (savedData) {
+      const parsed = JSON.parse(savedData);
+      setPeople(parsed.people || []);
+      setGifts(parsed.gifts || []);
+      setGlobalBudgetLimit(parsed.limit || 0);
+    } else {
+      setPeople([]); setGifts([]); setGlobalBudgetLimit(0);
+    }
+    setActiveTab(null);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const projectData = { people, gifts, limit: globalBudgetLimit };
+    localStorage.setItem(`gift_planner_data_${activeProjectId}`, JSON.stringify(projectData));
+    localStorage.setItem('gift_planner_projects', JSON.stringify(projects));
+  }, [people, gifts, globalBudgetLimit, projects, activeProjectId]);
 
   const stats = useMemo(() => {
     const totalPeopleBudget = people.reduce((acc, curr) => acc + curr.budget, 0);
@@ -498,22 +437,12 @@ export default function App() {
     setPersonToDelete(null);
   };
 
-  // --- Drag and Drop Handlers ---
   const handleSort = () => {
-    // Duplicate items
     let _people = [...people];
-
-    // Remove and save the dragged item content
     const draggedItemContent = _people.splice(dragItem.current, 1)[0];
-
-    // Switch the position
     _people.splice(dragOverItem.current, 0, draggedItemContent);
-
-    // Reset positions
     dragItem.current = null;
     dragOverItem.current = null;
-
-    // Update state
     setPeople(_people);
   };
 
@@ -532,8 +461,6 @@ export default function App() {
     setPeople(people.map(p => p.id === editingProfileId ? { ...p, profile: { ...profileForm } } : p));
     setIsProfileModalOpen(false);
   };
-
-  // --- AI HANDLERS ---
 
   const handleImportProfile = async () => {
     if (!importText || !editingProfileId) return;
@@ -579,6 +506,36 @@ export default function App() {
     const analysis = await analyzeGiftMatch(person, gift.name);
     setGifts(gifts.map(g => g.id === gift.id ? { ...g, analysis: analysis } : g));
     setAnalyzingGiftId(null);
+  };
+
+  const handleGenerateAlternatives = async () => {
+    const person = people.find(p => p.id === activeTab);
+    if (!newGift.name || !person) return;
+    
+    setIsGeneratingAlternatives(true);
+    const alts = await generateGiftAlternatives(person, newGift);
+    setAlternatives(alts || []);
+    setIsGeneratingAlternatives(false);
+  };
+
+  const handleWriteCard = async () => {
+    const person = people.find(p => p.id === activeTab);
+    if (!newGift.name || !person) return;
+    
+    setIsWritingCard(true);
+    const msg = await generateCardMessage(person, newGift);
+    setGeneratedCardMessage(msg);
+    setIsWritingCard(false);
+  };
+
+  const applyAlternative = (alt) => {
+    setNewGift({
+      ...newGift,
+      name: alt.name,
+      price: alt.estimatedPrice,
+      category: alt.category || newGift.category
+    });
+    setAlternatives([]); // Clear list after selection
   };
 
   const convertIdeaToGift = (personId, idea) => {
@@ -628,17 +585,23 @@ export default function App() {
     setNewGift({ name: '', price: '', category: 'Fun', notes: '' });
     setEditingGiftId(null);
     setIsAddModalOpen(false);
+    setAlternatives([]);
+    setGeneratedCardMessage('');
   };
 
   const openAddModal = () => {
     setEditingGiftId(null);
     setNewGift({ name: '', price: '', category: 'Fun', notes: '' });
+    setAlternatives([]);
+    setGeneratedCardMessage('');
     setIsAddModalOpen(true);
   };
 
   const openEditModal = (gift) => {
     setEditingGiftId(gift.id);
     setNewGift({ name: gift.name, price: gift.price, category: gift.category, notes: gift.notes || '' });
+    setAlternatives([]);
+    setGeneratedCardMessage('');
     setIsAddModalOpen(true);
   };
 
@@ -715,6 +678,88 @@ export default function App() {
   const unallocatedBudget = globalBudgetLimit - stats.totalPeopleBudget;
   const activePerson = people.find(p => p.id === activeTab);
   const activeProject = projects.find(p => p.id === activeProjectId);
+
+  const handleCreateProject = () => {
+    if (!newProjectName) return;
+    const newProject = { id: 'proj_' + Date.now(), name: newProjectName };
+    const updatedProjects = [...projects, newProject];
+    setProjects(updatedProjects);
+    setActiveProjectId(newProject.id); // Switch to it
+    setNewProjectName('');
+    setIsManageProjectsOpen(false);
+  };
+
+  const handleDeleteProject = (idToDelete) => {
+    if (window.confirm("Are you sure? This will delete all gifts in this project.")) {
+      const updatedProjects = projects.filter(p => p.id !== idToDelete);
+      setProjects(updatedProjects);
+      localStorage.removeItem(`gift_planner_data_${idToDelete}`);
+      if (activeProjectId === idToDelete) {
+         if (updatedProjects.length > 0) {
+           setActiveProjectId(updatedProjects[0].id);
+         } else {
+           setActiveProjectId(null);
+           setPeople([]); 
+           setGifts([]);
+         }
+      }
+    }
+  };
+
+  const handleStartEditProject = (project) => {
+    setEditingProjectId(project.id);
+    setTempEditName(project.name);
+  };
+
+  const handleSaveProjectName = (projectId) => {
+    if (!tempEditName.trim()) return;
+    const updatedProjects = projects.map(p => p.id === projectId ? { ...p, name: tempEditName } : p);
+    setProjects(updatedProjects);
+    setEditingProjectId(null);
+    setTempEditName('');
+  };
+
+  const handleCancelEditProject = () => {
+    setEditingProjectId(null);
+    setTempEditName('');
+  };
+
+  const handleExportBackup = () => {
+    const backupData = { projects: projects, projectData: {} };
+    projects.forEach(p => {
+      const key = `gift_planner_data_${p.id}`;
+      backupData.projectData[key] = JSON.parse(localStorage.getItem(key) || '{"people":[], "gifts":[], "limit":0}');
+    });
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gift_planner_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleImportBackup = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target.result);
+        if (!imported.projects || !Array.isArray(imported.projects)) { alert("Invalid backup file."); return; }
+        if (window.confirm("This will overwrite your current projects. Are you sure?")) {
+          setProjects(imported.projects);
+          localStorage.setItem('gift_planner_projects', JSON.stringify(imported.projects));
+          Object.keys(imported.projectData).forEach(key => { localStorage.setItem(key, JSON.stringify(imported.projectData[key])); });
+          setActiveProjectId(imported.projects[0]?.id || null);
+          setIsManageProjectsOpen(false);
+          alert("Backup restored successfully!");
+        }
+      } catch (error) { console.error(error); alert("Error restoring file."); }
+    };
+    reader.readAsText(file);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
@@ -960,14 +1005,6 @@ export default function App() {
                           </div>
                           {/* Action Buttons */}
                           <div className="flex items-center gap-1">
-                            {/* NEW: Import Button */}
-                            <button 
-                              onClick={() => { setEditingProfileId(person.id); setIsImportModalOpen(true); }}
-                              className="p-1.5 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-green-600 hover:border-green-200 transition-colors shadow-sm"
-                              title="Import Profile from Text"
-                            >
-                              <MessageSquare className="w-4 h-4" />
-                            </button>
                             <button onClick={() => openProfileModal(person)} className="p-1.5 rounded-full bg-white border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-colors shadow-sm" title="Edit Gift Profile">
                               <User className="w-4 h-4" />
                             </button>
