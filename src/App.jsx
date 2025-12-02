@@ -4,11 +4,11 @@ import {
   Edit2, X, ShoppingBag, Package, AlertCircle, TrendingUp, Link as LinkIcon,
   User, Ruler, Heart, ShieldAlert, History, Tag, ExternalLink, Sparkles, Loader2, ArrowRight,
   Menu, ChevronDown, Users, Lock, Wallet, Calculator, Search, Lightbulb, ThumbsUp, MessageSquare,
-  ArrowUpDown, GripVertical, FolderOpen, Settings, Download, Upload, FileJson
+  ArrowUpDown, GripVertical, FolderOpen, Settings, Download, Upload, FileJson, ChevronRight
 } from 'lucide-react';
 
 // --- Gemini API Helpers ---
-// This line is configured for Vite/Vercel. It looks for the key in your .env or Vercel settings.
+// PRODUCTION READY: Connects to your local .env file or Vercel environment variables
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; 
 
 const generateGeminiGiftIdeas = async (person, budgetLeft) => {
@@ -160,7 +160,8 @@ const Card = ({ children, className = "" }) => (
 );
 
 const Button = ({ children, onClick, variant = "primary", className = "", size = "md", disabled = false }) => {
-  const baseStyle = "inline-flex items-center justify-center font-medium transition-colors rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed";
+  // MOBILE TWEAK: Increased min-height for better touch targets
+  const baseStyle = "inline-flex items-center justify-center font-medium transition-colors rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0";
   
   const variants = {
     primary: "bg-red-600 hover:bg-red-700 text-white focus:ring-red-500",
@@ -351,7 +352,6 @@ export default function App() {
     );
     
     setProjects(updatedProjects);
-    // Local storage update handled by useEffect
     
     setEditingProjectId(null);
     setTempEditName('');
